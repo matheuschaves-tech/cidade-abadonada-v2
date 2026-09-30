@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noite na Cidade — A Chave Roxa</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0d12;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px}
+.game{width:100%;max-width:1000px}
+.fl-wrap{position:relative}
+.fl-hud{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.fl-chip{border:1px solid #2c3242;border-radius:6px;padding:3px 10px;font-size:13px;color:#9aa3b5;background:#12151d;white-space:nowrap}
+.fl-chip b{color:#e8ebf2;font-weight:500}
+#fl-objb{color:#a78bfa;font-weight:500}
+#fl-cv{width:100%;height:min(560px,72vh);display:block;border:1px solid #2c3242;border-radius:12px;touch-action:none;cursor:crosshair;user-select:none;background:#0b0e15}
+#fl-mini{position:absolute;top:42px;right:8px;border:1px solid #2c3242;border-radius:8px;background:rgba(8,10,16,.8)}
+.fl-foot{margin-top:8px;font-size:13px;color:#6b7386}
+.fl-ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(4,5,9,.6);border-radius:12px}
+.fl-card{background:#171b25;border:1px solid #2c3242;border-radius:12px;padding:24px 32px;text-align:center}
+.fl-card h2{margin:0 0 8px;font-size:20px;font-weight:500;color:#e8ebf2}
+.fl-card p{margin:0 0 16px;color:#9aa3b5;font-size:14px}
+.fl-card button{border:none;background:#e8ebf2;color:#12151d;border-radius:8px;padding:8px 24px;font-size:14px;font-weight:500;cursor:pointer}
+.fl-hide{display:none}
+</style>
+</head>
+<body>
+<div class="game">
+<div class="fl-wrap">
+  <div class="fl-hud">
+    <div class="fl-chip">Objetivo: ache a <b id="fl-objb">chave roxa</b> e abra a porta</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div class="fl-chip" id="fl-msg" style="display:none"></div>
+      <div class="fl-chip" id="fl-key">Chave roxa: <b>não</b></div>
+      <div class="fl-chip" id="fl-time">00:00</div>
+    </div>
+  </div>
+  <canvas id="fl-cv"></canvas>
+  <canvas id="fl-mini" width="132" height="96"></canvas>
+  <div class="fl-foot">WASD ou setas para mover · o mouse aponta a lanterna · no celular, toque e arraste · a porta aparece no minimapa (ponto âmbar)</div>
+  <div class="fl-ov fl-hide" id="fl-ov">
+    <div class="fl-card">
+      <h2>Porta destrancada</h2>
+      <p id="fl-ovtxt"></p>
+      <button id="fl-btn">Jogar novamente</button>
+    </div>
+  </div>
+</div>
+</div>
+<script>
+const cv=document.getElementById('fl-cv'),ctx=cv.getContext('2d');
+const mini=document.getElementById('fl-mini'),mctx=mini.getContext('2d');
+const dark=document.createElement('canvas'),dctx=dark.getContext('2d');
+const PURPLE='#a78bfa';
+const WORLD={w:2240,h:1600};
+let CW=0,CH=0,DPR=1,cam={x:0,y:0};
+let buildings=[],blocksArr=[],streetsX=[],streetsY=[],cars=[],trees=[],lamps=[],door=null,keyObj=null,spawn={x:0,y:0};
+let player={x:0,y:0,ang:0,hasKey:false};
+let keys={},mouse={x:0,y:0,on:false},touchT=null,startT=0,elapsed=0,won=false,msgUntil=0,lockUntil=0;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const rnd=(a,b)=>a+Math.random()*(b-a);
+function rr(c,x,y,w,h,r){c.beginPath();if(c.roundRect){c.roundRect(x,y,w,h,r);return;}c.rect(x,y,w,h);}
+function resize(){
+ DPR=Math.min(window.devicePixelRatio||1,2);
+ CW=cv.clientWidth;CH=cv.clientHeight;
+ cv.width=CW*DPR;cv.height=CH*DPR;
+ dark.width=cv.width;dark.height=cv.height;
+ ctx.setTransform(DPR,0,0,DPR,0,0);dctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize',resize);
+function hitsWorld(x,y,r){
+ for(const b of buildings)if(x+r>b.x&&x-r<b.x+b.w&&y+r>b.y&&y-r<b.y+b.h)return true;
+ for(const c of cars)if(x+r>c.x&&x-r<c.x+c.w&&y+r>c.y&&y-r<c.y+c.h)return true;
+ return false;
+}
+function freeSpot(m){
+ for(let t=0;t<80;t++){
+  const x=rnd(70,WORLD.w-70),y=rnd(70,WORLD.h-70);
+  if(!hitsWorld(x,y,m))return{x,y};
+ }
+ return{x:WORLD.w/2,y:WORLD.h/2};
+}
+function genCity(){
+ buildings=[];blocksArr=[];streetsX=[];streetsY=[];cars=[];trees=[];lamps=[];
+ const B=320,S=120;
+ const cols=Math.floor((WORLD.w-S)/(B+S)),rows=Math.floor((WORLD.h-S)/(B+S));
+ const ox=(WORLD.w-(cols*B+(cols-1)*S))/2,oy=(WORLD.h-(rows*B+(rows-1)*S))/2;
+ for(let i=0;i<cols;i++)streetsX.push(ox+i*(B+S)-S/2);
+ for(let j=0;j<rows;j++)streetsY.push(oy+j*(B+S)-S/2);
+ for(let i=0;i<cols;i++)for(let j=0;j<rows;j++){
+  const bx=ox+i*(B+S),by=oy+j*(B+S);
+  blocksArr.push({x:bx,y:by,w:B,h:B});
+  lamps.push({x:bx-18,y:by-18});
+  const m=28,g=14,cw=(B-2*m-g)/2,ch=(B-2*m-g)/2;
+  [[0,0],[1,0],[0,1],[1,1]].forEach(([cx,cy])=>{
+   if(Math.random()<0.15)return;
+   const w=cw+rnd(-16,8),h=ch+rnd(-16,8);
+   const x=bx+m+cx*(cw+g)+rnd(-6,6),y=by+m+cy*(ch+g)+rnd(-6,6);
+   const wins=[];
+   const nw=2+Math.floor(Math.random()*3);
+   for(let k=0;k<nw;k++)wins.push({x:x+10+Math.random()*(w-24),y:y+7,lit:Math.random()<0.3});
+   buildings.push({x,y,w,h,wins});
+  });
+ }
+ spawn={x:streetsX[Math.floor(cols/2)],y:streetsY[Math.floor(rows/2)]};
+ for(let k=0;k<14;k++){
+  const p=freeSpot(36),h=Math.random()<0.5;
+  cars.push({x:p.x,y:p.y,w:h?46:22,h:h?22:46});
+ }
+ for(let k=0;k<18;k++){const p=freeSpot(28);trees.push({x:p.x,y:p.y,r:rnd(8,13)});}
+ let best=null,bd=-1;
+ for(const b of buildings){
+  const cx=b.x+b.w/2,cy=b.y+b.h/2,d=Math.hypot(cx-spawn.x,cy-spawn.y);
+  if(d>bd){bd=d;best=b;}
+ }
+ door={x:best.x+best.w/2-22,y:best.y-7,w:44,h:13};
+ do{keyObj=freeSpot(52);}while(Math.hypot(keyObj.x-spawn.x,keyObj.y-spawn.y)<540);
+}
+window.addEventListener('keydown',e=>{
+ if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+ keys[e.key.toLowerCase()]=true;
+});
+window.addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
+cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect();mouse.x=e.clientX-r.left;mouse.y=e.clientY-r.top;mouse.on=true;});
+function touchPoint(e){const r=cv.getBoundingClientRect();const t=e.touches[0];return{x:t.clientX-r.left+cam.x,y:t.clientY-r.top+cam.y};}
+cv.addEventListener('touchstart',e=>{e.preventDefault();touchT=touchPoint(e);},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();touchT=touchPoint(e);},{passive:false});
+cv.addEventListener('touchend',e=>{e.preventDefault();touchT=null;},{passive:false});
+function move(dx,dy){
+ const r=12;
+ if(!hitsWorld(player.x+dx,player.y,r))player.x+=dx;
+ if(!hitsWorld(player.x,player.y+dy,r))player.y+=dy;
+ player.x=clamp(player.x,r,WORLD.w-r);player.y=clamp(player.y,r,WORLD.h-r);
+}
+function update(dt){
+ if(won)return;
+ elapsed=(performance.now()-startT)/1000;
+ let dx=((keys.d||keys.arrowright)?1:0)-((keys.a||keys.arrowleft)?1:0);
+ let dy=((keys.s||keys.arrowdown)?1:0)-((keys.w||keys.arrowup)?1:0);
+ if(touchT){
+  const vx=touchT.x-player.x,vy=touchT.y-player.y,d=Math.hypot(vx,vy);
+  if(d>10){dx=vx/d;dy=vy/d;}else touchT=null;
+ }
+ const len=Math.hypot(dx,dy);
+ if(len>0){
+  dx/=len;dy/=len;
+  move(dx*180*dt,dy*180*dt);
+  if(!mouse.on)player.ang=Math.atan2(dy,dx);
+ }
+ if(mouse.on)player.ang=Math.atan2(mouse.y-(player.y-cam.y),mouse.x-(player.x-cam.x));
+ if(!player.hasKey&&Math.hypot(player.x-keyObj.x,player.y-keyObj.y)<28){
+  player.hasKey=true;msgUntil=performance.now()+4000;
+  document.getElementById('fl-key').innerHTML='Chave roxa: <b style="color:'+PURPLE+'">encontrada</b>';
+ }
+ const dcx=door.x+door.w/2,dcy=door.y+door.h/2;
+ if(Math.hypot(player.x-dcx,player.y-dcy)<44){
+  if(player.hasKey){won=true;showWin();}
+  else lockUntil=performance.now()+1500;
+ }
+ cam.x=clamp(player.x-CW/2,0,Math.max(0,WORLD.w-CW));
+ cam.y=clamp(player.y-CH/2,0,Math.max(0,WORLD.h-CH));
+}
+function drawPlayer(){
+ const p=player;
+ ctx.save();ctx.translate(p.x,p.y);
+ ctx.fillStyle='rgba(0,0,0,0.35)';ctx.beginPath();ctx.ellipse(2,4,13,11,0,0,7);ctx.fill();
+ ctx.rotate(p.ang);
+ ctx.fillStyle='#3a4254';rr(ctx,-9,-8,21,16,7);ctx.fill();
+ ctx.fillStyle='#2e3542';rr(ctx,-9,-8,7,16,3);ctx.fill();
+ ctx.fillStyle='#d9a679';ctx.beginPath();ctx.arc(10,0,6,0,7);ctx.fill();
+ ctx.fillStyle='#3a4254';ctx.beginPath();ctx.arc(8.5,0,6.2,Math.PI*0.55,Math.PI*1.45);ctx.fill();
+ ctx.fillStyle='#ffd76a';ctx.fillRect(14,-2,7,4);
+ ctx.restore();
+}
+function draw(t){
+ ctx.clearRect(0,0,CW,CH);
+ ctx.save();ctx.translate(-cam.x,-cam.y);
+ ctx.fillStyle='#0b0e15';ctx.fillRect(cam.x-4,cam.y-4,CW+8,CH+8);
+ ctx.fillStyle='#151a25';
+ for(const b of blocksArr)ctx.fillRect(b.x,b.y,b.w,b.h);
+ ctx.strokeStyle='rgba(205,210,225,0.10)';ctx.lineWidth=3;ctx.setLineDash([16,24]);
+ ctx.beginPath();
+ for(const x of streetsX){ctx.moveTo(x,0);ctx.lineTo(x,WORLD.h);}
+ for(const y of streetsY){ctx.moveTo(0,y);ctx.lineTo(WORLD.w,y);}
+ ctx.stroke();ctx.setLineDash([]);
+ for(const tr of trees){
+  ctx.fillStyle='rgba(0,0,0,0.3)';ctx.beginPath();ctx.ellipse(tr.x+2,tr.y+3,tr.r,tr.r*0.8,0,0,7);ctx.fill();
+  ctx.fillStyle='#1c2b21';ctx.beginPath();ctx.arc(tr.x,tr.y,tr.r,0,7);ctx.fill();
+  ctx.fillStyle='#27402e';ctx.beginPath();ctx.arc(tr.x-2,tr.y-2,tr.r*0.55,0,7);ctx.fill();
+ }
+ for(const c of cars){
+  ctx.fillStyle='#363d4d';rr(ctx,c.x,c.y,c.w,c.h,5);ctx.fill();
+  ctx.fillStyle='#22262f';rr(ctx,c.x+6,c.y+4,c.w-12,c.h-8,3);ctx.fill();
+ }
+ for(const b of buildings){
+  ctx.fillStyle='#232836';ctx.fillRect(b.x,b.y,b.w,b.h);
+  ctx.fillStyle='#2e3547';ctx.fillRect(b.x,b.y,b.w,4);
+  for(const wn of b.wins){
+   ctx.fillStyle=wn.lit?'rgba(214,164,90,0.7)':'#10141d';
+   ctx.fillRect(wn.x,wn.y,10,5);
+  }
+ }
+ const d=door;
+ ctx.fillStyle='rgba(139,92,246,0.16)';ctx.fillRect(d.x-6,d.y-6,d.w+12,d.h+12);
+ ctx.fillStyle='#6e563d';ctx.fillRect(d.x,d.y,d.w,d.h);
+ ctx.fillStyle='#453522';ctx.fillRect(d.x+3,d.y+3,d.w-6,d.h-6);
+ if(player.hasKey){
+  ctx.save();ctx.shadowColor=PURPLE;ctx.shadowBlur=14;ctx.strokeStyle=PURPLE;ctx.lineWidth=2;ctx.strokeRect(d.x+1,d.y+1,d.w-2,d.h-2);ctx.restore();
+ }else{
+  ctx.fillStyle='#c8a24a';ctx.beginPath();ctx.arc(d.x+d.w-9,d.y+d.h/2,2.4,0,7);ctx.fill();
+ }
+ const now=performance.now();
+ if(now<lockUntil){
+  ctx.globalAlpha=Math.min(1,(lockUntil-now)/400);
+  ctx.fillStyle='#e8e4da';ctx.font='12px sans-serif';ctx.textAlign='center';
+  ctx.fillText('Trancada — encontre a chave roxa',d.x+d.w/2,d.y-12);
+  ctx.globalAlpha=1;
+ }
+ if(!player.hasKey){
+  const k=keyObj,pu=1+0.12*Math.sin(t*5);
+  ctx.save();ctx.translate(k.x,k.y);ctx.rotate(Math.sin(t*1.6)*0.25);
+  ctx.shadowColor=PURPLE;ctx.shadowBlur=18*pu;ctx.strokeStyle=PURPLE;ctx.lineWidth=3;
+  ctx.beginPath();ctx.arc(-6,0,5,0,7);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-1,0);ctx.lineTo(13,0);ctx.moveTo(8,0);ctx.lineTo(8,4);ctx.moveTo(12,0);ctx.lineTo(12,5);ctx.stroke();
+  ctx.restore();
+ }
+ drawPlayer();
+ ctx.restore();
+ drawDark(t);
+ drawMini();
+ const mm=Math.floor(elapsed/60),ss=Math.floor(elapsed%60);
+ document.getElementById('fl-time').textContent=(mm<10?'0':'')+mm+':'+(ss<10?'0':'')+ss;
+ const m2=document.getElementById('fl-msg');
+ if(now<msgUntil){m2.style.display='';m2.textContent='Você pegou a chave roxa! Agora vá até a porta.';}
+ else m2.style.display='none';
+}
+function drawDark(t){
+ dctx.clearRect(0,0,CW,CH);
+ dctx.fillStyle='rgba(3,5,10,0.96)';dctx.fillRect(0,0,CW,CH);
+ dctx.save();dctx.translate(-cam.x,-cam.y);
+ dctx.globalCompositeOperation='destination-out';
+ const p=player;
+ let g=dctx.createRadialGradient(p.x,p.y,0,p.x,p.y,70);
+ g.addColorStop(0,'rgba(255,255,255,0.55)');g.addColorStop(1,'rgba(255,255,255,0)');
+ dctx.fillStyle=g;dctx.beginPath();dctx.arc(p.x,p.y,70,0,7);dctx.fill();
+ const fl=275+Math.sin(t*11)*9+(Math.random()<0.03?-50:0);
+ g=dctx.createRadialGradient(p.x,p.y,10,p.x,p.y,fl);
+ g.addColorStop(0,'rgba(255,255,255,0.98)');g.addColorStop(0.65,'rgba(255,255,255,0.5)');g.addColorStop(1,'rgba(255,255,255,0)');
+ dctx.fillStyle=g;
+ dctx.beginPath();dctx.moveTo(p.x,p.y);dctx.arc(p.x,p.y,fl,p.ang-0.42,p.ang+0.42);dctx.closePath();dctx.fill();
+ for(const l of lamps){
+  g=dctx.createRadialGradient(l.x,l.y,0,l.x,l.y,48);
+  g.addColorStop(0,'rgba(255,255,255,0.16)');g.addColorStop(1,'rgba(255,255,255,0)');
+  dctx.fillStyle=g;dctx.beginPath();dctx.arc(l.x,l.y,48,0,7);dctx.fill();
+ }
+ dctx.restore();dctx.globalCompositeOperation='source-over';
+ ctx.drawImage(dark,0,0,CW,CH);
+}
+function drawMini(){
+ const mw=132,s=mw/WORLD.w;
+ mctx.clearRect(0,0,132,96);
+ mctx.fillStyle='rgba(255,255,255,0.07)';
+ for(const b of blocksArr)mctx.fillRect(b.x*s,b.y*s,b.w*s,b.h*s);
+ mctx.fillStyle='#d9a44a';mctx.fillRect((door.x+door.w/2)*s-2,(door.y+door.h/2)*s-2,4,4);
+ mctx.beginPath();mctx.arc(player.x*s,player.y*s,3,0,7);
+ mctx.fillStyle=PURPLE;mctx.fill();
+ mctx.strokeStyle='rgba(255,255,255,0.9)';mctx.lineWidth=1;mctx.stroke();
+}
+function showWin(){
+ const mm=Math.floor(elapsed/60),ss=Math.floor(elapsed%60);
+ document.getElementById('fl-ovtxt').textContent='Você encontrou a chave roxa e abriu a porta em '+mm+' min e '+(ss<10?'0':'')+ss+' s.';
+ document.getElementById('fl-ov').classList.remove('fl-hide');
+}
+let last=0;
+function loop(ts){
+ const t=ts/1000;const dt=Math.min(0.05,(t-last)||0.016);last=t;
+ update(dt);draw(t);
+ requestAnimationFrame(loop);
+}
+function reset(){
+ genCity();
+ player={x:spawn.x,y:spawn.y,ang:0,hasKey:false};
+ won=false;touchT=null;mouse.on=false;startT=performance.now();elapsed=0;
+ document.getElementById('fl-key').innerHTML='Chave roxa: <b>não</b>';
+ document.getElementById('fl-ov').classList.add('fl-hide');
+}
+document.getElementById('fl-btn').addEventListener('click',reset);
+resize();reset();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
